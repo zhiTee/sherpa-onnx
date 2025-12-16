@@ -25,8 +25,6 @@ private const val REQUEST_RECORD_AUDIO_PERMISSION = 200
 // adb emu avd hostmicon
 
 class MainActivity : AppCompatActivity() {
-    private val permissions: Array<String> = arrayOf(Manifest.permission.RECORD_AUDIO)
-
     private lateinit var recognizer: OnlineRecognizer
     private var audioRecord: AudioRecord? = null
     private lateinit var recordButton: Button

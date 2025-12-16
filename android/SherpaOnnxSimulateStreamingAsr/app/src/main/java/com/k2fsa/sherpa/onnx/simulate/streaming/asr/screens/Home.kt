@@ -68,7 +68,7 @@ fun HomeScreen() {
     var isInitialized by remember { mutableStateOf(false) }
 
     // we change asrModelType in github actions
-    val asrModelType = 15
+    val asrModelType = 45
 
     LaunchedEffect(Unit) {
         if (asrModelType >= 9000) {
@@ -78,15 +78,19 @@ fun HomeScreen() {
         }
 
         withContext(Dispatchers.Default) {
-            // Call your heavy initialization off the main thread
-            SimulateStreamingAsr.initOfflineRecognizer(activity, asrModelType)
-            SimulateStreamingAsr.initVad(activity.assets)
+            try {
+                SimulateStreamingAsr.initOfflineRecognizer(activity, asrModelType)
+                SimulateStreamingAsr.initVad(activity.assets)
+            } catch (e: Exception) {
+                resultList.add("Initialization failed: ${e.message}")
+            }
         }
 
-        // Back on the Main thread: update UI state
+        // Update UI state
         isInitialized = true
-        resultList.clear()
+        // Optionally clear resultList here only if needed
     }
+
 
     val onRecordingButtonClick: () -> Unit = {
         isStarted = !isStarted

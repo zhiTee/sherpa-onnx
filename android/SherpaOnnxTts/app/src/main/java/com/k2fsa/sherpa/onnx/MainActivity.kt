@@ -1,14 +1,13 @@
 package com.k2fsa.sherpa.onnx
 
+import android.app.Activity
 import android.content.res.AssetManager
-import android.media.AudioAttributes
-import android.media.AudioFormat
-import android.media.AudioManager
-import android.media.AudioTrack
-import android.media.MediaPlayer
+import android.media.*
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
+import android.view.MotionEvent
+import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.Toast
@@ -16,170 +15,239 @@ import androidx.appcompat.app.AppCompatActivity
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import kotlin.concurrent.thread
 
-const val TAG = "sherpa-onnx"
+private const val TAG = "sherpa-onnx-xml"
 
 class MainActivity : AppCompatActivity() {
+
     private lateinit var tts: OfflineTts
-    private lateinit var text: EditText
-    private lateinit var sid: EditText
-    private lateinit var speed: EditText
-    private lateinit var generate: Button
-    private lateinit var play: Button
-    private lateinit var stop: Button
-    private var stopped: Boolean = false
+    private lateinit var track: AudioTrack
     private var mediaPlayer: MediaPlayer? = null
 
-    // see
-    // https://developer.android.com/reference/kotlin/android/media/AudioTrack
-    private lateinit var track: AudioTrack
+    @Volatile private var stopped = false
+
+    private lateinit var textBox: EditText
+    private lateinit var sidBox: EditText
+    private lateinit var speedBox: EditText
+    private lateinit var generateBtn: Button
+    private lateinit var playBtn: Button
+    private lateinit var stopBtn: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        Log.i(TAG, "Start to initialize TTS")
+        bindViews()
+        setListeners()
+
+        Log.i(TAG, "Initializing TTS…")
         initTts()
-        Log.i(TAG, "Finish initializing TTS")
+        Log.i(TAG, "Done.")
 
-        Log.i(TAG, "Start to initialize AudioTrack")
+        Log.i(TAG, "Initializing AudioTrack…")
         initAudioTrack()
-        Log.i(TAG, "Finish initializing AudioTrack")
-
-        text = findViewById(R.id.text)
-        sid = findViewById(R.id.sid)
-        speed = findViewById(R.id.speed)
-
-        generate = findViewById(R.id.generate)
-        play = findViewById(R.id.play)
-        stop = findViewById(R.id.stop)
-
-        generate.setOnClickListener { onClickGenerate() }
-        play.setOnClickListener { onClickPlay() }
-        stop.setOnClickListener { onClickStop() }
-
-        sid.setText("0")
-        speed.setText("1.0")
-
-        // we will change sampleText here in the CI
-        val sampleText = ""
-        text.setText(sampleText)
-
-        play.isEnabled = false
+        Log.i(TAG, "Done.")
     }
 
+    // -----------------------------
+    // Bind XML views
+    // -----------------------------
+    private fun bindViews() {
+        textBox = findViewById(R.id.text)
+        sidBox = findViewById(R.id.sid)
+        speedBox = findViewById(R.id.speed)
+
+        generateBtn = findViewById(R.id.generate)
+        playBtn = findViewById(R.id.play)
+        stopBtn = findViewById(R.id.stop)
+    }
+
+    private fun setListeners() {
+        generateBtn.setOnClickListener {
+            hideKeyboard()
+            validateAndGenerate()
+        }
+
+        playBtn.setOnClickListener {
+            hideKeyboard()
+            startPlay()
+        }
+
+        stopBtn.setOnClickListener {
+            hideKeyboard()
+            startStop()
+        }
+    }
+
+    // ---------------------------------------
+    // Hide keyboard when touching outside EditText
+    // ---------------------------------------
+    override fun dispatchTouchEvent(ev: MotionEvent?): Boolean {
+        currentFocus?.let {
+            val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+            imm.hideSoftInputFromWindow(it.windowToken, 0)
+            it.clearFocus()
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
+    private fun hideKeyboard() {
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.hideSoftInputFromWindow(window.decorView.windowToken, 0)
+        currentFocus?.clearFocus()
+    }
+
+    private fun toast(msg: String) {
+        runOnUiThread {
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // ---------------------------------------
+    // Validate & generate
+    // ---------------------------------------
+    private fun validateAndGenerate() {
+        val text = textBox.text.toString()
+        val sid = sidBox.text.toString().toIntOrNull()
+        val speed = speedBox.text.toString().toFloatOrNull()
+
+        when {
+            text.isBlank() -> {
+                toast("Please enter text")
+                return
+            }
+
+            sid == null || sid < 0 -> {
+                toast("Speaker ID must be a non-negative integer")
+                return
+            }
+
+            speed == null || speed <= 0f -> {
+                toast("Speed must be a positive number")
+                return
+            }
+        }
+
+        generateBtn.isEnabled = false
+        startGenerate(text, sid, speed)
+
+    }
+
+    // ---------------------------------------
+    // AudioTrack + TTS
+    // ---------------------------------------
     private fun initAudioTrack() {
-        val sampleRate = tts.sampleRate()
-        val bufLength = AudioTrack.getMinBufferSize(
-            sampleRate,
+        val sr = tts.sampleRate()
+
+        val buf = AudioTrack.getMinBufferSize(
+            sr,
             AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_FLOAT
         )
-        Log.i(TAG, "sampleRate: $sampleRate, buffLength: $bufLength")
 
-        val attr = AudioAttributes.Builder().setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+        val attrs = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
             .build()
 
         val format = AudioFormat.Builder()
+            .setSampleRate(sr)
             .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-            .setSampleRate(sampleRate)
             .build()
 
-        track = AudioTrack(
-            attr, format, bufLength, AudioTrack.MODE_STREAM,
-            AudioManager.AUDIO_SESSION_ID_GENERATE
-        )
+        track = AudioTrack(attrs, format, buf, AudioTrack.MODE_STREAM, AudioManager.AUDIO_SESSION_ID_GENERATE)
         track.play()
     }
 
-    // this function is called from C++
     private fun callback(samples: FloatArray): Int {
-        if (!stopped) {
+        return if (!stopped) {
             track.write(samples, 0, samples.size, AudioTrack.WRITE_BLOCKING)
-            return 1
+            1
         } else {
             track.stop()
-            return 0
+            0
         }
     }
 
-    private fun onClickGenerate() {
-        val sidInt = sid.text.toString().toIntOrNull()
-        if (sidInt == null || sidInt < 0) {
-            Toast.makeText(
-                applicationContext,
-                "Please input a non-negative integer for speaker ID!",
-                Toast.LENGTH_SHORT
-            ).show()
-            return
-        }
-
-        val speedFloat = speed.text.toString().toFloatOrNull()
-        if (speedFloat == null || speedFloat <= 0) {
-            Toast.makeText(
-                applicationContext,
-                "Please input a positive number for speech speed!",
-                Toast.LENGTH_SHORT
-            ).show()
-            return
-        }
-
-        val textStr = text.text.toString().trim()
-        if (textStr.isBlank() || textStr.isEmpty()) {
-            Toast.makeText(applicationContext, "Please input a non-empty text!", Toast.LENGTH_SHORT)
-                .show()
-            return
-        }
+    private fun startGenerate(text: String, sid: Int?, speed: Float?) {
+        stopped = false
 
         track.pause()
         track.flush()
         track.play()
 
-        play.isEnabled = false
-        generate.isEnabled = false
-        stopped = false
-        Thread {
-            val audio = tts.generateWithCallback(
-                text = textStr,
-                sid = sidInt,
-                speed = speedFloat,
+        if (sid == null) {
+            toast("Please enter speaker ID")
+            return
+        }
+        if (speed == null ){
+            toast("Please enter speed")
+            return
+        }
+
+        thread {
+            val result = tts.generateWithCallback(
+                text = text,
+                sid = sid,
+                speed = speed,
                 callback = this::callback
             )
 
-            val filename = application.filesDir.absolutePath + "/generated.wav"
-            val ok = audio.samples.size > 0 && audio.save(filename)
-            if (ok) {
-                runOnUiThread {
-                    play.isEnabled = true
-                    generate.isEnabled = true
-                    track.stop()
+            val filename = "${filesDir.absolutePath}/generated.wav"
+            val ok = result.samples.isNotEmpty() && result.save(filename)
+
+            runOnUiThread {
+                generateBtn.isEnabled = true
+
+                if (ok) {
+                    toast("Generated: $filename")
+                } else {
+                    toast("Failed to generate audio")
                 }
+
+                try { track.stop() } catch (_: Exception) {}
             }
-        }.start()
+        }
     }
 
-    private fun onClickPlay() {
-        val filename = application.filesDir.absolutePath + "/generated.wav"
+    private fun startPlay() {
+        val f = File("${filesDir.absolutePath}/generated.wav")
+        if (!f.exists()) {
+            toast("Generate audio first")
+            return
+        }
+
         mediaPlayer?.stop()
-        mediaPlayer = MediaPlayer.create(
-            applicationContext,
-            Uri.fromFile(File(filename))
-        )
-        mediaPlayer?.start()
+        mediaPlayer?.release()
+
+        mediaPlayer = MediaPlayer().apply {
+            setDataSource(this@MainActivity, Uri.fromFile(f))
+            prepare()
+            start()
+        }
     }
 
-    private fun onClickStop() {
+    private fun startStop() {
         stopped = true
-        play.isEnabled = true
-        generate.isEnabled = true
-        track.pause()
-        track.flush()
-        mediaPlayer?.stop()
+
+        try {
+            track.pause()
+            track.flush()
+        } catch (_: Exception) {}
+
+        try {
+            mediaPlayer?.stop()
+            mediaPlayer?.release()
+        } catch (_: Exception) {}
+
         mediaPlayer = null
     }
 
+    // -----------------------------
+    // TTS initialization (same logic as your original)
+    // -----------------------------
     private fun initTts() {
         var modelDir: String?
         var modelName: String?
@@ -279,12 +347,11 @@ class MainActivity : AppCompatActivity() {
 
         // Example 10
         // kokoro-multi-lang-v1_0
-        // modelDir = "kokoro-multi-lang-v1_0"
-        // modelName = "model.onnx"
-        // voices = "voices.bin"
-        // dataDir = "kokoro-multi-lang-v1_0/espeak-ng-data"
-        // lexicon = "kokoro-multi-lang-v1_0/lexicon-us-en.txt,kokoro-multi-lang-v1_0/lexicon-zh.txt"
-        // ruleFsts = "$modelDir/phone-zh.fst,$modelDir/date-zh.fst,$modelDir/number-zh.fst"
+        modelDir = "kokoro-int8-multi-lang-v1_1"
+        modelName = "model.int8.onnx"
+        voices = "voices.bin"
+        dataDir = "$modelDir/espeak-ng-data"
+        lexicon = "$modelDir/lexicon-us-en.txt,$modelDir/lexicon-zh.txt"
 
         // Example 11
         // kitten-nano-en-v0_1-fp16
@@ -316,53 +383,42 @@ class MainActivity : AppCompatActivity() {
         tts = OfflineTts(assetManager = assets, config = config)
     }
 
-
     private fun copyDataDir(dataDir: String): String {
         Log.i(TAG, "data dir is $dataDir")
         copyAssets(dataDir)
 
-        val newDataDir = application.getExternalFilesDir(null)!!.absolutePath
-        Log.i(TAG, "newDataDir: $newDataDir")
-        return newDataDir
+        return application.getExternalFilesDir(null)!!.absolutePath
     }
 
     private fun copyAssets(path: String) {
-        val assets: Array<String>?
         try {
-            assets = application.assets.list(path)
-            if (assets!!.isEmpty()) {
+            val list = assets.list(path) ?: return
+            if (list.isEmpty()) {
                 copyFile(path)
             } else {
-                val fullPath = "${application.getExternalFilesDir(null)}/$path"
-                val dir = File(fullPath)
+                val dir = File("${application.getExternalFilesDir(null)}/$path")
                 dir.mkdirs()
-                for (asset in assets.iterator()) {
-                    val p: String = if (path == "") "" else path + "/"
-                    copyAssets(p + asset)
-                }
+                list.forEach { copyAssets("$path/$it") }
             }
-        } catch (ex: IOException) {
-            Log.e(TAG, "Failed to copy $path. $ex")
+        } catch (ex: Exception) {
+            Log.e(TAG, "Failed copying $path: $ex")
         }
     }
 
     private fun copyFile(filename: String) {
         try {
-            val istream = application.assets.open(filename)
-            val newFilename = application.getExternalFilesDir(null).toString() + "/" + filename
-            val ostream = FileOutputStream(newFilename)
-            // Log.i(TAG, "Copying $filename to $newFilename")
-            val buffer = ByteArray(1024)
-            var read = 0
-            while (read != -1) {
-                ostream.write(buffer, 0, read)
-                read = istream.read(buffer)
+            val istream = assets.open(filename)
+            val out = FileOutputStream("${application.getExternalFilesDir(null)}/$filename")
+            val buf = ByteArray(1024)
+            var read: Int
+            while (istream.read(buf).also { read = it } != -1) {
+                out.write(buf, 0, read)
             }
             istream.close()
-            ostream.flush()
-            ostream.close()
+            out.flush()
+            out.close()
         } catch (ex: Exception) {
-            Log.e(TAG, "Failed to copy $filename, $ex")
+            Log.e(TAG, "Failed to copy $filename: $ex")
         }
     }
 }

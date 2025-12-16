@@ -132,7 +132,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private  fun initVadModel() {
-        val type = 0
+        val type = 1
         Log.i(TAG, "Select VAD model type ${type}")
         val config = getVadModelConfig(type)
 
@@ -212,7 +212,7 @@ class MainActivity : AppCompatActivity() {
         // Please change getOfflineModelConfig() to add new models
         // See https://k2-fsa.github.io/sherpa/onnx/pretrained_models/index.html
         // for a list of available models
-        val asrModelType = 0
+        val asrModelType = 48
         val asrRuleFsts: String?
         asrRuleFsts = null
         Log.i(TAG, "Select model type ${asrModelType} for ASR")
@@ -221,9 +221,9 @@ class MainActivity : AppCompatActivity() {
             featConfig = getFeatureConfig(sampleRate = sampleRateInHz, featureDim = 80),
             modelConfig = getOfflineModelConfig(type = asrModelType)!!,
         )
-        if (asrRuleFsts != null) {
-            config.ruleFsts = asrRuleFsts;
-        }
+//        if (asrRuleFsts != null) {
+//            config.ruleFsts = asrRuleFsts;
+//        }
 
         offlineRecognizer = OfflineRecognizer(
             assetManager = application.assets,
